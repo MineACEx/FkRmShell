@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # ============================================================
-#  格机脚本检测工具  v3.0
+#  格机脚本检测工具  v1.0.1
 #  Brick Script Detector for Android 10-16
 #  彩色加粗 · 内联Base64自动解码 · 双模式
 #  ============================================================
@@ -20,7 +20,7 @@ BIN_DIR="${SCRIPT_DIR}/bin"
 TARGET_DIR="${SCRIPT_DIR}/script"
 LOGS_DIR="${SCRIPT_DIR}/logs"
 
-MAX_DECODE_DEPTH=20
+MAX_DECODE_DEPTH=5
 HUGE_FILE_THRESHOLD=10485760
 
 TMP_DIR="/data/local/tmp/script_detector_$$"
@@ -62,7 +62,7 @@ _color() { _f="$1"; shift; "$_f"; printf '%s' "$*"; c_reset; }
 
 # ===================== 输出系统 =====================
 SLEEP_CMD=""
-[ "$(command -v sleep 2>/dev/null)" ] && SLEEP_CMD="sleep"
+[ "$(command -v sleep 1.3>/dev/null)" ] && SLEEP_CMD="sleep"
 
 _log()  { echo "$1" >> "$LOG_FILE"; }
 _echo() { echo "$1"; _log "$1"; }
@@ -288,12 +288,14 @@ recursive_decode() {
 dangerous_in_decoded() {
     _decoded_file="$1"
     _has=0
-    grep -qE 'rm[[:space:]]+-[rRfF]+[[:space:]]+/(data|sdcard|system|vendor|product|boot|persist|metadata|cache|firmware|modem|nv)([[:space:]]|/)' "$_decoded_file" 2>/dev/null && _has=1
+    grep -qE 'rm[[:space:]]+-[rRfF]+[[:space:]]+/(data|sdcard|system|vendor|product|boot|persist|metadata|cache|firmware|modem|nv)([[:space:]]|/|$)' "$_decoded_file" 2>/dev/null && _has=1
+    grep -qE 'rm[[:space:]]+-[rRfF]+[[:space:]]+/(storage/emulated|mnt/vendor|mnt/sdcard|sdcard)' "$_decoded_file" 2>/dev/null && _has=1
     grep -qE 'rm[[:space:]]+-[rRfF]+[[:space:]]+/([[:space:]]|$)' "$_decoded_file" 2>/dev/null && _has=1
     grep -qE 'dd[[:space:]]+if=.*of=/dev/block/' "$_decoded_file" 2>/dev/null && _has=1
     grep -qE '(mkfs|mke2fs|make_ext4fs|make_f2fs)' "$_decoded_file" 2>/dev/null && _has=1
     grep -qE 'fastboot[[:space:]]+(erase|format|-w)' "$_decoded_file" 2>/dev/null && _has=1
-    grep -qE '(cat|cp|tee)[[:space:]].*/dev/block/' "$_decoded_file" 2>/dev/null && _has=1
+    grep -qE '(cat|cp|tee)[[:space:]].*(/dev/block/|of=/dev/block/)' "$_decoded_file" 2>/dev/null && _has=1
+    grep -qE '(recovery[[:space:]]+--wipe_data|wipe[[:space:]]+data)' "$_decoded_file" 2>/dev/null && _has=1
     return "$_has"
 }
 
@@ -328,14 +330,16 @@ check_inline_base64() {
     _wkdir="$2"
     _wkdir_global="$_wkdir"
     _result_file="${TMP_DIR}/danger_$(basename "$_file" | tr '/' '_')"
+    # Use temp file to track danger finding (because grep pipe runs in subshell)
+    : > "${_wkdir}/check_inline_found"
+    : > "${_wkdir}/inline_b64_decoded.danger"
     _found_any=0
 
     B64_CMD=$(get_cmd_path "base64")
     [ -z "$B64_CMD" ] && return 1  # 没有 base64 工具，跳过
 
     # ===== 类型A: echo/printf | base64 -d 管道模式 =====
-    grep -nE '(echo|printf)[[:space:]]+("[^"]{20,}"|'"'"'[^'"'"']{20,}'"'"').*\|.*base64.*-d' "$_file" 2>/dev/null | \
-    while IFS= read -r _match_line; do
+    grep -nE '(echo|printf)[[:space:]]+("[^"]{20,}"|'"'"'[^'"'"']{20,}'"'"').*\|.*base64.*-d' "$_file" 2>/dev/null | while IFS= read -r _match_line; do
         _linenum=$(echo "$_match_line" | cut -d: -f1)
         _line_content=$(echo "$_match_line" | cut -d: -f2-)
         _b64_str=$(echo "$_line_content" | grep -oE '"[A-Za-z0-9+/=]{20,}"' | tr -d '"' | head -1)
@@ -347,14 +351,14 @@ check_inline_base64() {
             try_decode_and_check "$_b64_str" "管道-第${_linenum}行" "$_result_file"
             _ret=$?
             [ "$_ret" -eq 2 ] && echo "DANGER" > "${_wkdir}/inline_b64_decoded.danger"
-            _found_any=1; _pause
+            echo 1 >> "${_wkdir}/check_inline_found"
+            _pause
         fi
     done
 
     # ===== 类型B: 文件内嵌的独立长 base64 字符串（Gzip解压产物中常见） =====
     # 查找一行中 ≥60 字符的纯 base64 字符串（不在 echo/printf 管道中）
-    grep -nE '^[[:space:]]*[A-Za-z0-9+/=]{60,}[[:space:]]*$' "$_file" 2>/dev/null | \
-    while IFS= read -r _match_line; do
+    grep -nE '^[[:space:]]*[A-Za-z0-9+/=]{60,}[[:space:]]*$' "$_file" 2>/dev/null | while IFS= read -r _match_line; do
         _linenum=$(echo "$_match_line" | cut -d: -f1)
         _b64_str=$(echo "$_match_line" | cut -d: -f2- | tr -d '[:space:]')
 
@@ -374,8 +378,12 @@ check_inline_base64() {
         try_decode_and_check "$_b64_str" "独立块-第${_linenum}行" "$_result_file"
         _ret=$?
         [ "$_ret" -eq 2 ] && echo "DANGER" > "${_wkdir}/inline_b64_decoded.danger"
-        _found_any=1; _pause
+        echo 1 >> "${_wkdir}/check_inline_found"
+        _pause
     done
+
+    # Count any found
+    [ "$(wc -l < "${_wkdir}/check_inline_found" 2>/dev/null)" -gt 0 ] && _found_any=1
 
     [ "$_found_any" -eq 1 ] && return 0
     return 1
@@ -428,15 +436,15 @@ check_dangerous_patterns() {
 
     # ---- 严重 (2) ----
     _check "rm -rf 删除关键分区" \
-        'rm[[:space:]]+-[rRfF]+[[:space:]]+/(data|sdcard|system|vendor|product|boot|persist|metadata|cache|firmware|modem|nv)([[:space:]]|/)' 2
+        'rm[[:space:]]+-[rRfF]+[[:space:]]+/(data|sdcard|system|vendor|product|boot|persist|metadata|cache|firmware|modem|nv)([[:space:]]|/|$)' 2
     _check "rm -rf 删除根目录" \
         'rm[[:space:]]+-[rRfF]+[[:space:]]+/([[:space:]]|$|;|&)' 2
     _check "rm -rf 删除存储空间" \
-        'rm[[:space:]]+-[rRfF]+[[:space:]]+/(storage/emulated|mnt/vendor|mnt/sdcard)' 2
+        'rm[[:space:]]+-[rRfF]+[[:space:]]+/(storage/emulated|mnt/vendor|mnt/sdcard|sdcard)' 2
     _check "rm -rf 删除 data 关键子目录" \
-        'rm[[:space:]]+-[rRfF]+[[:space:]]+/(data/data|data/app|data/system|data/dalvik-cache|data/media|data/dalvik)' 2
+        'rm[[:space:]]+-[rRfF]+[[:space:]]+/(data/data|data/app|data/system|data/dalvik-cache|data/media|data/dalvik)([[:space:]]|/|$)' 2
     _check "rm -rf 删除 persist" \
-        'rm[[:space:]]+-[rRfF]+[[:space:]]+/(persist|mnt/vendor/persist)' 2
+        'rm[[:space:]]+-[rRfF]+[[:space:]]+/(persist|mnt/vendor/persist)([[:space:]]|/|$)' 2
 
     _check "dd 写入块设备 (破坏分区)" \
         'dd[[:space:]]+if=.*[[:space:]]+of=/dev/block/' 2
@@ -806,7 +814,7 @@ cleanup() {
 
 print_banner() {
     _echo ""
-    _echon "$(_color c_banner '      格机脚本检测工具  v3.1')"
+    _echon "$(_color c_banner '      格机脚本检测工具  v1.0.1')"
     _echo ""
     _echon "$(_color c_info  '      Brick Script Detector for Android 10-16')"
     _echo ""
