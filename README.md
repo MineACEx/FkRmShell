@@ -63,7 +63,7 @@
   <tr>
    <td width="50%">
       <h3>📱 文件管理器自适应</h3>
-      <p>专为 <strong>文件管理器 Root 直接执行</strong>场景优化。自动探测自身路径、自动创建 <code>script/</code> 目录、无需命令行传参、执行完毕后暂停等待查看结果。</p>
+      <p>专为 <strong>文件管理器 Root 直接执行</strong>场景优化。通过 <code>UpdateAPP.sh</code> 一键拉取最新云端脚本并执行，自动下载依赖工具，无需手动部署。</p>
     </td>
     <td width="50%">
       <h3>🎨 彩色加粗终端输出</h3>
@@ -114,44 +114,63 @@
 ### 目录结构
 
 ```
-你的工作目录/
-├── Start.sh          ← 主检测脚本
-├── bin/                 ← 可选：二进制工具 (base64, gunzip, strings)
-└── script/              ← 把待检测脚本扔进这个文件夹
-    ├── 可疑1.sh
-    └── 可疑2.sh
+你的根目录/                     ← 例如 /data/Rmfuck/ 或 /sdcard/FkRmShell/
+├── bin/                         ← 工具目录 (base64, gunzip, gzip, vim 等)
+├── script/                      ← 把待检测脚本扔进这里
+│   ├── 可疑1.sh
+│   └── 可疑2.sh
+├── logs/                        ← 运行日志 (自动生成)
+└── UpdateAPP/                   ← 启动器目录
+    ├── UpdateAPP.sh             ← 主启动脚本 (执行这个)
+    └── bin/
+        └── busybox              ← busybox 二进制
 ```
 
 ### 使用方法
 
 **方式一：文件管理器直接执行（推荐）**
 
-1. 用支持 Root 的文件管理器（MT Manager / Root Explorer）打开脚本所在目录
+1. 将整个项目文件夹放到 `/sdcard/` 或任意位置
 2. 将待检测脚本放入 `script/` 文件夹
-3. 点击 `Start.sh`，选择「Root 模式执行」
-4. 按交互菜单选择检测模式
-5. 等待扫描完成，按回车退出
+3. 进入 `UpdateAPP/` 目录，点击 `UpdateAPP.sh`
+4. 选择「Root 模式执行」
+5. 脚本会自动：
+   - 检查依赖，缺失则自动从网络下载
+   - 拉取最新云端检测脚本
+   - 进入交互菜单，按提示选择检测模式
 
 **方式二：终端命令行**
 
 ```sh
-# 批量扫描 script/ 目录
-su -c "sh /path/to/Start.sh"
-
-# 扫描指定文件
-su -c "sh /path/to/Start.sh -f /sdcard/可疑脚本.sh"
+# 进入 UpdateAPP 目录，Root 执行
+su -c "sh /sdcard/FkRmShell/UpdateAPP/UpdateAPP.sh"
 ```
 
-### 二进制工具（可选但推荐）
+### 工作流程
 
-| 工具 | 作用 | 缺失影响 |
-|------|------|----------|
-| `base64` | Base64 解密 | 无法检测 Base64 编码脚本 |
-| `gunzip` / `gzip` | Gzip 解压 | 无法检测 Gzip 压缩脚本 |
-| `strings` | 二进制字符串提取 | 无法检测 ELF/二进制格式脚本 |
-| `od` / `hexdump` / `xxd` | 文件魔数检测 | 无法精确识别 Gzip 文件头 |
+```
+UpdateAPP.sh 启动
+  │
+  ├─ 阶段1: 检查依赖 (./bin/vim, ./bin/gzip)
+  │     └─ 缺失 → 自动下载 main.zip → 解压到 ./bin/
+  │
+  ├─ 阶段2: 下载远程脚本
+  │     └─ wget 拉取 GitHub Pages 最新版 → 保存到 ./.bash
+  │
+  └─ 阶段3: 执行远程脚本
+        └─ 子shell隔离运行, stdin 正常可用, read 可交互
+```
 
-> 将上述工具放入 `bin/` 目录即可自动识别。大多数 Android 系统的 toybox 已自带 `base64` 和 `gunzip`。
+### 环境变量 (远程脚本可用)
+
+| 变量 | 值 | 说明 |
+|------|-----|------|
+| `$ROOT` | `UpdateAPP.sh 所在目录` | 例如 `/sdcard/FkRmShell/UpdateAPP` |
+| `$PARENT` | `ROOT 的上级目录` | 例如 `/sdcard/FkRmShell` |
+| `$PARENT/bin` | 工具目录 | base64, gunzip, gzip 等 |
+| `$PARENT/script` | 待扫描脚本目录 | 你的 `.sh` 文件放这里 |
+
+> 远程脚本使用 `$ROOT` / `$PARENT` 获取目录路径，**不要用 `$0` / `dirname` / `realpath`**，因为管道执行模式下 `$0` 不可靠。
 
 ---
 
@@ -200,7 +219,7 @@ su -c "sh /path/to/Start.sh -f /sdcard/可疑脚本.sh"
 
 > **本工具仅进行静态文本分析，全程不会执行任何待检测脚本。**
 >
-> 所有解码/解压操作均在隔离的临时目录 (`/data/local/tmp/`) 中进行，检测完毕后自动清理。
+> 检测过程在脚本所在目录中进行，临时文件执行后自动清理。
 >
 > 不要以任何方式执行被标记为"危险"的脚本文件。
 
