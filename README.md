@@ -130,11 +130,12 @@
 
 **方式一：文件管理器直接执行（推荐）**
 
-1. 将整个项目文件夹放到 `/sdcard/` 或任意位置
-2. 将待检测脚本放入 `script/` 文件夹
-3. 进入 `UpdateAPP/` 目录，点击 `UpdateAPP.sh`
-4. 选择「Root 模式执行」
-5. 脚本会自动：
+1. 将整个项目文件夹放到 `/data/` 或任意位置
+2. 给予UpdateAPP.sh 777权限
+3. 将待检测脚本放入 `script/` 文件夹
+4. 进入 `UpdateAPP/` 目录，点击 `UpdateAPP.sh`
+5. 选择「Root 模式执行」
+6. 脚本会自动：
    - 检查依赖，缺失则自动从网络下载
    - 拉取最新云端检测脚本
    - 进入交互菜单，按提示选择检测模式
@@ -143,7 +144,7 @@
 
 ```sh
 # 进入 UpdateAPP 目录，Root 执行
-su -c "sh /sdcard/FkRmShell/UpdateAPP/UpdateAPP.sh"
+su -c "sh .UpdateAPP.sh"
 ```
 
 ### 工作流程
